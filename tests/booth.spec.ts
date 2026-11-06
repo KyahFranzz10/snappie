@@ -380,6 +380,12 @@ test("kiosk setup is PIN protected and offers a printable 4x6 result", async ({
   await page
     .getByRole("button", { name: "Make it yours" })
     .click({ timeout: 25000 });
+  await expect(
+    page.getByRole("button", { name: "Save a draft on this device" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Delete saved draft" }),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "This is the one" }).click();
   await expect(page.locator(".composed-preview canvas")).toHaveJSProperty(
     "width",

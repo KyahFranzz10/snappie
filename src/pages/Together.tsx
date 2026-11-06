@@ -13,8 +13,11 @@ import {
   configured,
   roomSecret,
   rpc,
+  supabase,
+  turnstileSiteKey,
 } from "../services/supabase/client";
 import { useOnline } from "../hooks/useOnline";
+import { SignupChallenge } from "../components/SignupChallenge";
 export function Together({ join = false }: { join?: boolean }) {
   const online = useOnline();
   const { id } = useParams();
@@ -24,6 +27,9 @@ export function Together({ join = false }: { join?: boolean }) {
   const [passcode, setPasscode] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [verified, setVerified] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [challengeAttempt, setChallengeAttempt] = useState(0);
   const [preview, setPreview] = useState<{
     name: string;
     locked: boolean;
@@ -31,8 +37,19 @@ export function Together({ join = false }: { join?: boolean }) {
   const [invitation, setInvitation] = useState("");
   const [copied, setCopied] = useState(false);
   const secret = new URLSearchParams(location.hash.slice(1)).get("key") || "";
+  const challengeSiteKey = verified ? undefined : turnstileSiteKey;
   useEffect(() => {
-    if (!join || !id || !configured || !online) return;
+    if (!turnstileSiteKey || !supabase) return;
+    let active = true;
+    void supabase.auth.getSession().then(({ data }) => {
+      if (active && data.session) setVerified(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!join || !id || !configured || !online || challengeSiteKey) return;
     let active = true;
     void anonymousSession()
       .then(() =>
@@ -50,7 +67,21 @@ export function Together({ join = false }: { join?: boolean }) {
     return () => {
       active = false;
     };
-  }, [join, id, secret, online]);
+  }, [join, id, secret, online, challengeSiteKey]);
+  async function verify() {
+    setBusy(true);
+    setError("");
+    try {
+      await anonymousSession(captchaToken);
+      setVerified(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verification failed.");
+      setChallengeAttempt((attempt) => attempt + 1);
+    } finally {
+      setCaptchaToken("");
+      setBusy(false);
+    }
+  }
   async function submit() {
     if (!online || !configured) return;
     setBusy(true);
@@ -59,12 +90,13 @@ export function Together({ join = false }: { join?: boolean }) {
       await anonymousSession();
       if (join) {
         if (!id) throw new Error("Invalid invitation.");
-        await rpc("join_room", {
+        const rejection = await rpc<string | null>("join_room", {
           p_id: id,
           p_secret: secret,
           p_passcode: passcode,
           p_nickname: nickname.trim(),
         });
+        if (rejection) throw new Error(rejection);
         navigate(`/room/${id}#key=${secret}`);
       } else {
         const key = roomSecret();
@@ -143,9 +175,20 @@ export function Together({ join = false }: { join?: boolean }) {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              void submit();
+              if (challengeSiteKey) {
+                if (captchaToken && !busy && online) void verify();
+              } else {
+                void submit();
+              }
             }}
           >
+            {challengeSiteKey && configured && (
+              <SignupChallenge
+                key={challengeAttempt}
+                siteKey={challengeSiteKey}
+                onToken={setCaptchaToken}
+              />
+            )}
             {!join && (
               <label>
                 Give your room a name
@@ -188,13 +231,21 @@ export function Together({ join = false }: { join?: boolean }) {
             )}
             <button
               className="button primary full"
-              disabled={busy || !online || !configured || (join && !preview)}
+              formNoValidate={!!challengeSiteKey}
+              disabled={
+                busy ||
+                !online ||
+                !configured ||
+                (challengeSiteKey ? !captchaToken : join && !preview)
+              }
             >
               {busy
                 ? "Opening your booth…"
-                : join
-                  ? "Join the booth"
-                  : "Create a private room"}{" "}
+                : challengeSiteKey
+                  ? "Verify to continue"
+                  : join
+                    ? "Join the booth"
+                    : "Create a private room"}{" "}
               <ArrowRight size={18} />
             </button>
           </form>

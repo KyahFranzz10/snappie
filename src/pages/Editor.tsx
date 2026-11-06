@@ -112,6 +112,7 @@ export function Editor({ result = false }: { result?: boolean }) {
     }
   }
   async function save() {
+    if (mode === "kiosk") return;
     try {
       await saveDraft(photos, editor);
       setMessage("Draft saved on this device.");
@@ -485,22 +486,26 @@ export function Editor({ result = false }: { result?: boolean }) {
               >
                 This is the one <ArrowRight size={18} />
               </button>
-              <button
-                className="text-button centered"
-                onClick={() => void save()}
-              >
-                <Save size={15} /> Save a draft on this device
-              </button>
-              <button
-                className="text-button centered"
-                onClick={() =>
-                  void deleteDraft()
-                    .then(() => setMessage("Saved draft deleted."))
-                    .catch(() => setMessage("Could not delete draft."))
-                }
-              >
-                <Trash2 size={14} /> Delete saved draft
-              </button>
+              {mode !== "kiosk" && (
+                <>
+                  <button
+                    className="text-button centered"
+                    onClick={() => void save()}
+                  >
+                    <Save size={15} /> Save a draft on this device
+                  </button>
+                  <button
+                    className="text-button centered"
+                    onClick={() =>
+                      void deleteDraft()
+                        .then(() => setMessage("Saved draft deleted."))
+                        .catch(() => setMessage("Could not delete draft."))
+                    }
+                  >
+                    <Trash2 size={14} /> Delete saved draft
+                  </button>
+                </>
+              )}
             </>
           )}
           {message && (

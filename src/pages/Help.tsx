@@ -13,7 +13,7 @@ export function Help() {
           [
             ShieldCheck,
             "Private, by default",
-            "Solo and kiosk photos are processed on your device. There is no public gallery, automatic recording, analytics, or cloud photo upload. Saving a draft is optional and uses this browser’s local storage. Delete it in the editor or clear site data.",
+            "Solo and kiosk photos are processed on your device. There is no public gallery, automatic recording, analytics, or cloud photo upload. Outside kiosk mode, saving a draft is optional and stores it in this browser. Delete it in the editor or clear site data.",
           ],
           [
             UsersRound,
