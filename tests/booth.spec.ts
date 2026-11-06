@@ -15,6 +15,34 @@ async function captureFour(page: Page) {
     { timeout: 25000 },
   );
 }
+test("solo setup opens a single Polaroid that can become a contact sheet", async ({
+  page,
+}) => {
+  await page.goto("/setup");
+  await page.getByRole("button", { name: "2 shots", exact: true }).click();
+  const polaroid = page.getByRole("button", { name: /Instant Polaroid/ });
+  await polaroid.click();
+  await expect(polaroid).toHaveAttribute("aria-pressed", "true");
+  await page.getByLabel("Polaroid arrangement").selectOption("single");
+  await page.getByRole("button", { name: "Open my booth" }).click();
+  await page
+    .getByRole("button", { name: "Enable camera", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Let’s take some photos" }).click();
+  await page.getByRole("button", { name: "Make it yours" }).click();
+  await expect(
+    page.getByRole("combobox", { name: "Layout", exact: true }),
+  ).toHaveValue("polaroid");
+  const arrangement = page.getByRole("combobox", { name: "Print arrangement" });
+  await expect(arrangement).toHaveValue("0");
+  await expect(arrangement.locator("option")).toHaveCount(3);
+  await arrangement.selectOption("");
+  await page
+    .getByRole("combobox", { name: "Caption style" })
+    .selectOption("postmark");
+  await expect(page.locator(".composed-preview.polaroid canvas")).toBeVisible();
+});
+
 test("camera preview stays compact with capture controls visible on desktop and mobile", async ({
   page,
 }) => {
@@ -108,6 +136,14 @@ test("four real MediaDevices captures, retake, edit, save, and full-resolution P
     path: "test-results/result-desktop.png",
     fullPage: true,
   });
+  await page.getByLabel("Output size").selectOption("polaroid");
+  await expect(page.locator(".composed-preview.polaroid canvas")).toBeVisible();
+  const polaroidDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download PNG" }).click();
+  const polaroid = await readFile((await (await polaroidDownload).path())!);
+  expect([polaroid.readUInt32BE(16), polaroid.readUInt32BE(20)]).toEqual([
+    1200, 1440,
+  ]);
   expect(errors).toEqual([]);
 });
 test("optional countdown videos record real silent clips and capture stills at zero", async ({
@@ -544,4 +580,121 @@ test("verified photo transport runs over real WebRTC data channels", async ({
   });
   await page.getByRole("button", { name: "Use dark theme" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+});
+
+test("five connected peers receive the same host photo", async ({ page }) => {
+  for (const file of ["peer", "transfer"]) {
+    const source = (await readFile(`src/services/webrtc/${file}.ts`, "utf8"))
+      .replace("../supabase/client", "./signaling.js")
+      .replace('"./transfer"', '"./transfer.js"')
+      .replace("import.meta.env.VITE_ICE_SERVERS", '"[]"');
+    const js = ts.transpileModule(source, {
+      compilerOptions: {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.ES2022,
+      },
+    }).outputText;
+    await page.route(`**/__tests/${file}.js`, (route) =>
+      route.fulfill({ contentType: "application/javascript", body: js }),
+    );
+  }
+  await page.route("**/__tests/signaling.js", (route) =>
+    route.fulfill({
+      contentType: "application/javascript",
+      body: `
+      const channels = new Set();
+      const sync = () => {
+        for (const channel of channels) channel.handlers.sync();
+      };
+      export const supabase = {
+        auth: { getSession: async () => ({ data: { session: { access_token: "test" } } }) },
+        realtime: { setAuth: async () => {} },
+        channel(_topic, { config }) {
+          return {
+            uid: config.presence.key,
+            handlers: {},
+            on(type, filter, handler) {
+              this.handlers[type === "presence" ? filter.event : type] = handler;
+              return this;
+            },
+            subscribe(handler) { queueMicrotask(() => handler("SUBSCRIBED")); },
+            async track(presence) {
+              this.presence = presence;
+              channels.add(this);
+              sync();
+              return "ok";
+            },
+            presenceState() {
+              return Object.fromEntries([...channels].map((channel) => [channel.uid, [channel.presence]]));
+            },
+            async send({ payload }) {
+              for (const channel of channels)
+                if (channel !== this) queueMicrotask(() => channel.handlers.broadcast({ payload }));
+              return "ok";
+            },
+          };
+        },
+        async removeChannel(channel) {
+          channels.delete(channel);
+          sync();
+        },
+      };
+    `,
+    }),
+  );
+  await page.route("**/__tests/mesh", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<title>Room mesh</title>",
+    }),
+  );
+  await page.goto("/__tests/mesh");
+  const result = await page.evaluate(async () => {
+    const moduleUrl = "/__tests/peer.js";
+    const { BoothPeer } = await import(moduleUrl);
+    const room = { id: "test-room", host_id: "host" };
+    const photo = "data:image/jpeg;base64," + "A".repeat(75000);
+    const guests = ["a", "b", "c", "d"];
+    const received: Record<string, string> = {};
+    const errors: string[] = [];
+    const peers: Array<InstanceType<typeof BoothPeer>> = [];
+    const waitUntilOpen = async () => {
+      const end = Date.now() + 12000;
+      while (!peers.every((peer) => peer.open)) {
+        if (errors.length || Date.now() >= end)
+          throw new Error(errors.join(", ") || "Mesh connection timed out");
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+    };
+    const join = async (id: string) => {
+      const peer = new BoothPeer(room, id, new MediaStream(), {
+        state: () => {},
+        presence: () => {},
+        connection: () => {},
+        remote: () => {},
+        message: () => {},
+        photo: (from: string, shot: string, data: string) => {
+          if (from === "host" && shot === "group") received[id] = data;
+        },
+        error: (error: Error) => errors.push(error.message),
+      });
+      peers.push(peer);
+      await peer.connect();
+    };
+    try {
+      await join("host");
+      await join("a");
+      await waitUntilOpen();
+      for (const guest of guests.slice(1)) await join(guest);
+      await waitUntilOpen();
+      await peers[0].sendPhoto(guests, "group", photo);
+      return {
+        everyoneReceived: guests.every((id) => received[id] === photo),
+        errors,
+      };
+    } finally {
+      await Promise.all(peers.map((peer) => peer.dispose()));
+    }
+  });
+  expect(result).toEqual({ everyoneReceived: true, errors: [] });
 });

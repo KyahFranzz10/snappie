@@ -47,7 +47,7 @@ export class PhotoTransport {
         this.pending.delete(id);
         reject(
           new Error(
-            "Your partner did not confirm this photo. Retry the shared session.",
+            "A camera did not confirm this photo. Retry the shared session.",
           ),
         );
       }, 45000);

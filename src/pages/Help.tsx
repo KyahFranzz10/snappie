@@ -17,8 +17,8 @@ export function Help() {
           ],
           [
             UsersRound,
-            "A booth just for two",
-            "Online rooms use Supabase for anonymous identity, room membership, presence, and connection messages. Photos and live media travel over encrypted WebRTC connections, potentially relayed by a TURN server. Your invited partner receives your captures and can save them. Keep invitation links private. Rooms expire after inactivity or when the host closes them.",
+            "A booth for up to five",
+            "Online rooms use Supabase for anonymous identity, room membership, presence, and connection messages. Photos and live media travel over encrypted WebRTC connections, potentially relayed by a TURN server. The host assembles the group photo and shares it with everyone in the session. Keep invitation links private. Rooms expire after inactivity or when the host closes them.",
           ],
           [
             Camera,
@@ -45,8 +45,9 @@ export function Help() {
         <h2>Print a little piece of happiness.</h2>
         <p>
           Classic strips export at 600 × 1800 pixels for 2 × 6 inches. Postcards
-          export at 1800 × 1200 pixels for 6 × 4 inches, both at 300 pixels per
-          inch. Match your paper size and select 100% scale. Printing always
+          export at 1800 × 1200 pixels for 6 × 4 inches. Polaroids export at
+          1200 × 1440 pixels for 4 × 4.8 inches. All three print at 300 pixels
+          per inch. Match your paper size and select 100% scale. Printing always
           opens the browser and operating system print dialog. A dedicated
           silent-print bridge is a future integration.
         </p>
@@ -54,8 +55,8 @@ export function Help() {
         <p>
           Shared countdowns estimate the difference between device clocks over
           the data channel. Internet latency and device performance vary, so
-          captures are approximately synchronized. Both images must arrive
-          before a paired shot is composed.
+          captures are approximately synchronized. All images must arrive before
+          the group shot is composed.
         </p>
         <Link to="/setup" className="text-link">
           Ready to make a memory? →

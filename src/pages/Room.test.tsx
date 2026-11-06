@@ -11,12 +11,16 @@ import { Room } from "./Room";
 import { useBooth } from "../stores/booth";
 const mocks = vi.hoisted(() => ({
   userId: "guest",
+  ids: ["host", "guest"],
   send: vi.fn(),
+  compose: vi.fn(async (photos: string[]) => photos.join(":")),
   callbacks: null as null | {
     state: (s: string) => void;
-    message: (m: Record<string, unknown>) => void;
-    photo: (id: string, data: string) => void;
+    message: (member: string, m: Record<string, unknown>) => void;
+    photo: (member: string, id: string, data: string) => void;
     error: (e: Error) => void;
+    presence: (ids: string[]) => void;
+    connection: (member: string, open: boolean) => void;
   },
   sendPhoto: vi.fn().mockResolvedValue(undefined),
   stop: vi.fn(),
@@ -30,10 +34,7 @@ vi.mock("../services/supabase/client", () => ({
     host_id: "host",
     expires_at: new Date(Date.now() + 1800000).toISOString(),
     closed: false,
-    members: [
-      { user_id: "host", nickname: "Host" },
-      { user_id: "guest", nickname: "Guest" },
-    ],
+    members: mocks.ids.map((id) => ({ user_id: id, nickname: id })),
   }),
 }));
 vi.mock("../features/camera/useCamera", () => ({
@@ -48,13 +49,14 @@ vi.mock("../features/camera/useCamera", () => ({
     capture: () => "local-photo",
   }),
 }));
-vi.mock("../features/photostrip/compose", () => ({
-  pairPhotos: async (a: string, b: string) => `paired:${a}:${b}`,
+vi.mock("../features/photostrip/group", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../features/photostrip/group")>()),
+  composeGroup: mocks.compose,
 }));
 vi.mock("../services/webrtc/peer", () => ({
   BoothPeer: class {
     open = true;
-    remoteOffset = 0;
+    offset = () => 0;
     latency = 0;
     sendPhoto = mocks.sendPhoto;
     send = mocks.send;
@@ -62,20 +64,23 @@ vi.mock("../services/webrtc/peer", () => ({
     constructor(
       _room: unknown,
       _uid: unknown,
-      _partner: unknown,
       _stream: unknown,
       callbacks: typeof mocks.callbacks,
     ) {
       mocks.callbacks = callbacks;
     }
     async connect() {
+      mocks.callbacks!.presence(mocks.ids);
+      for (const id of mocks.ids.filter((id) => id !== mocks.userId))
+        mocks.callbacks!.connection(id, true);
       mocks.callbacks!.state("connected");
     }
   },
 }));
 describe("completed private room keepsake", () => {
-  it("connects automatically and lets the host start once both people are ready", async () => {
+  it("connects automatically and lets the host start only when all four guests are ready", async () => {
     mocks.userId = "host";
+    mocks.ids = ["host", "guest", "second", "third", "fourth"];
     mocks.send.mockClear();
     try {
       render(
@@ -94,20 +99,55 @@ describe("completed private room keepsake", () => {
       });
       expect(startButton).toBeDisabled();
       fireEvent.click(readyButton);
-      expect(mocks.send).toHaveBeenCalledWith({ type: "ready", value: true });
+      expect(
+        screen.getByRole("button", { name: "Equal Five" }),
+      ).toHaveAttribute("aria-pressed", "true");
+      expect(mocks.send).toHaveBeenCalledWith(["guest"], {
+        type: "ready",
+        value: true,
+      });
       expect(startButton).toBeDisabled();
-      act(() => mocks.callbacks!.message({ type: "ready", value: true }));
+      act(() => {
+        for (const guest of ["guest", "second", "third"])
+          mocks.callbacks!.message(guest, { type: "ready", value: true });
+      });
+      expect(startButton).toBeDisabled();
+      act(() =>
+        mocks.callbacks!.message("fourth", { type: "ready", value: true }),
+      );
       expect(startButton).toBeEnabled();
+      vi.useFakeTimers();
       fireEvent.click(startButton);
-      expect(mocks.send).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "schedule" }),
+      const guests = mocks.ids.slice(1);
+      const schedule = mocks.send.mock.calls.find(
+        ([, message]) => message.type === "schedule",
+      );
+      expect(schedule?.[0]).toEqual(guests);
+      const shotId = schedule?.[1].id;
+      await act(async () => vi.advanceTimersByTimeAsync(3400));
+      await act(async () => {
+        for (const guest of guests.slice(0, 3))
+          mocks.callbacks!.photo(guest, shotId, guest);
+      });
+      expect(mocks.compose).not.toHaveBeenCalled();
+      await act(async () => mocks.callbacks!.photo("fourth", shotId, "fourth"));
+      expect(mocks.compose).toHaveBeenCalledWith(
+        ["local-photo", ...guests],
+        "equal",
+      );
+      expect(mocks.sendPhoto).toHaveBeenCalledWith(
+        guests,
+        shotId,
+        ["local-photo", ...guests].join(":"),
       );
     } finally {
+      vi.useRealTimers();
       mocks.userId = "guest";
+      mocks.ids = ["host", "guest"];
     }
   });
 
-  it("waits for every pair and preserves export access after the partner leaves", async () => {
+  it("waits for every group shot and preserves export access after the host leaves", async () => {
     render(
       <MemoryRouter initialEntries={["/room/test-room"]}>
         <Routes>
@@ -119,7 +159,13 @@ describe("completed private room keepsake", () => {
     await screen.findByRole("heading", { name: "Our private booth" });
     await screen.findByText("connected");
     fireEvent.click(screen.getByRole("button", { name: "I’m ready" }));
-    act(() => mocks.callbacks!.message({ type: "reset", count: 2 }));
+    act(() =>
+      mocks.callbacks!.message("host", {
+        type: "reset",
+        run: "session",
+        count: 2,
+      }),
+    );
     let acknowledgeLastPhoto!: () => void;
     mocks.sendPhoto
       .mockImplementationOnce(async () => {})
@@ -131,19 +177,26 @@ describe("completed private room keepsake", () => {
       );
     for (const id of ["shot-a", "shot-b"]) {
       act(() =>
-        mocks.callbacks!.message({
+        mocks.callbacks!.message("host", {
           type: "schedule",
+          run: "session",
           id,
           at: Date.now() - 1,
           layout: "side",
         }),
       );
       await waitFor(() =>
-        expect(mocks.sendPhoto).toHaveBeenCalledWith(id, "local-photo"),
+        expect(mocks.sendPhoto).toHaveBeenCalledWith(
+          ["host"],
+          id,
+          "local-photo",
+        ),
       );
-      await act(async () => mocks.callbacks!.photo(id, `remote-${id}`));
+      await act(async () => mocks.callbacks!.photo("host", id, `group-${id}`));
     }
-    act(() => mocks.callbacks!.message({ type: "complete" }));
+    act(() =>
+      mocks.callbacks!.message("host", { type: "complete", run: "session" }),
+    );
     await act(async () => acknowledgeLastPhoto());
     expect(screen.getByRole("button", { name: "You’re ready" })).toBeEnabled();
     expect(
@@ -156,8 +209,8 @@ describe("completed private room keepsake", () => {
     fireEvent.click(screen.getByRole("button", { name: "Make our keepsake" }));
     expect(await screen.findByText("Editor opened")).toBeVisible();
     expect(useBooth.getState().photos).toEqual([
-      "paired:remote-shot-a:local-photo",
-      "paired:remote-shot-b:local-photo",
+      "group-shot-a",
+      "group-shot-b",
     ]);
     expect(mocks.stop).toHaveBeenCalled();
   });

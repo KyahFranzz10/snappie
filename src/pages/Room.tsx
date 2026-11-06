@@ -29,19 +29,33 @@ import {
 } from "../services/webrtc/peer";
 import { useCamera } from "../features/camera/useCamera";
 import { useBooth } from "../stores/booth";
-import { pairPhotos } from "../features/photostrip/compose";
+import {
+  composeGroup,
+  groupLayoutName,
+  groupLayouts,
+  groupTiles,
+  type GroupLayout,
+} from "../features/photostrip/group";
 import { useOnline } from "../hooks/useOnline";
 interface RoomDetail extends RoomInfo {
   members: RoomMember[];
 }
+
+interface Run {
+  id: string;
+  guests: string[];
+}
 interface Shot {
-  local?: string;
-  remote?: string;
-  resolve?: (data: string) => void;
-  reject?: (e: Error) => void;
-  timer?: ReturnType<typeof setTimeout>;
-  layout: "side" | "stack";
-  composing?: boolean;
+  photos: Map<string, string>;
+  resolve?: () => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+function RemoteCamera({ stream }: { stream?: MediaStream }) {
+  const video = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    if (video.current) video.current.srcObject = stream ?? null;
+  }, [stream]);
+  return <video ref={video} autoPlay playsInline />;
 }
 export function Room() {
   const { id } = useParams();
@@ -54,7 +68,6 @@ export function Room() {
   );
   captureRef.current = () =>
     camera.capture({ format: "jpeg", maxDimension: 1920 });
-  const remoteVideo = useRef<HTMLVideoElement>(null);
   const peer = useRef<BoothPeer | null>(null);
   const connecting = useRef(false);
   const [room, setRoom] = useState<RoomDetail | null>(null);
@@ -66,11 +79,20 @@ export function Room() {
   const [micGranted, setMicGranted] = useState(false);
   const [cameraOn, setCameraOn] = useState(true);
   const [ready, setReady] = useState(false);
-  const [partnerReady, setPartnerReady] = useState(false);
+
+  const [remoteReady, setRemoteReady] = useState<Record<string, boolean>>({});
+  const [streams, setStreams] = useState<
+    Record<string, MediaStream | undefined>
+  >({});
+  const [openIds, setOpenIds] = useState<string[]>([]);
   const [present, setPresent] = useState<string[]>([]);
-  const [layout, setLayout] = useState<"side" | "stack">("side");
-  const layoutRef = useRef(layout);
-  layoutRef.current = layout;
+  const [layout, setLayout] = useState<GroupLayout>("equal");
+  const [spotlight, setSpotlight] = useState("");
+  const [previewStack, setPreviewStack] = useState(false);
+  const activeLayout = groupLayouts[layout].sizes.includes(present.length)
+    ? layout
+    : "equal";
+  const [working, setWorking] = useState(false);
   const readyRef = useRef(false);
   const [count, setCount] = useState<number | null>(null);
   const [photos, setPhotos] = useState<string[]>([]);
@@ -78,38 +100,44 @@ export function Room() {
   const [expectedPhotos, setExpectedPhotos] = useState(4);
   const shots = useRef(new Map<string, Shot>());
   const completed = useRef<string[]>([]);
-  const sequence = useRef(false);
+  const sequence = useRef<Run | null>(null);
   const alive = useRef(true);
   const timers = useRef(
     new Map<ReturnType<typeof setTimeout>, (e: Error) => void>(),
   );
   const isHost = room?.host_id === uid;
-  const hostRef = useRef(isHost);
-  hostRef.current = isHost;
   const booth = useBooth();
+
   const clearShots = useCallback(() => {
-    for (const s of shots.current.values()) {
-      if (s.timer) clearTimeout(s.timer);
-      s.reject?.(new Error("Session stopped."));
+    sequence.current = null;
+    for (const shot of shots.current.values()) {
+      clearTimeout(shot.timer);
+      shot.resolve?.();
     }
     shots.current.clear();
-    for (const [t, reject] of timers.current) {
-      clearTimeout(t);
-      reject(new Error("Session stopped. Reconnect and try again."));
+    for (const [timer, reject] of timers.current) {
+      clearTimeout(timer);
+      reject(new Error("Capture stopped."));
     }
     timers.current.clear();
+    setWorking(false);
     setCount(null);
   }, []);
   const failure = useCallback(
     (e: Error) => {
-      if (alive.current) {
-        setError(e.message);
-        setReady(false);
-        readyRef.current = false;
-        setPartnerReady(false);
-        sequence.current = false;
-        setState("disconnected");
-        clearShots();
+      if (!alive.current) return;
+      const run = sequence.current;
+      clearShots();
+      setError(e.message);
+      setState("disconnected");
+      if (run && peer.current) {
+        for (const guest of run.guests) {
+          try {
+            peer.current.send([guest], { type: "abort", run: run.id });
+          } catch {
+            // The other cameras detect a closed link independently.
+          }
+        }
       }
     },
     [clearShots],
@@ -149,6 +177,7 @@ export function Room() {
             setError(
               "This room has closed or expired. Create a fresh little booth.",
             );
+            clearShots();
             peer.current?.dispose();
             camera.stop();
           }
@@ -157,6 +186,7 @@ export function Room() {
         if (active) {
           setState("expired");
           setError(e instanceof Error ? e.message : "Room expired.");
+          clearShots();
           peer.current?.dispose();
           camera.stop();
         }
@@ -172,7 +202,7 @@ export function Room() {
     if (!online && peer.current)
       failure(
         new Error(
-          "You’re offline. Reconnect to the internet, then both retry the connection.",
+          "You’re offline. Reconnect to the internet, then reconnect the booth.",
         ),
       );
   }, [online, failure]);
@@ -189,66 +219,25 @@ export function Room() {
       timers.current.set(t, reject);
     });
   }
-  async function combine(shotId: string) {
-    const shot = shots.current.get(shotId);
-    if (!shot?.local || !shot.remote || shot.composing) return;
-    shot.composing = true;
-    try {
-      const result = await pairPhotos(
-        hostRef.current ? shot.local : shot.remote,
-        hostRef.current ? shot.remote : shot.local,
-        shot.layout,
-      );
-      if (!alive.current || shots.current.get(shotId) !== shot) return;
-      if (shot.timer) clearTimeout(shot.timer);
-      shot.resolve?.(result);
-      shots.current.delete(shotId);
-      completed.current.push(result);
-      setPhotos([...completed.current]);
-    } catch (e) {
-      shot.reject?.(
-        e instanceof Error ? e : new Error("Could not combine photos."),
-      );
-      failure(
-        new Error(
-          "Could not combine a paired photo. Retry the shared session.",
-        ),
-      );
-    }
+
+  function appendPhoto(photo: string) {
+    completed.current.push(photo);
+    setPhotos([...completed.current]);
   }
-  async function take(
-    shotId: string,
-    at: number,
-    shotLayout: "side" | "stack",
-  ) {
-    if (!peer.current?.open) throw new Error("Your partner is disconnected.");
-    const existing = shots.current.get(shotId);
-    if (existing?.local) return;
-    const shot: Shot = existing || { layout: shotLayout };
-    shots.current.set(shotId, shot);
-    if (!shot.timer)
-      shot.timer = setTimeout(
-        () =>
-          failure(
-            new Error(
-              "Your partner’s photo did not arrive. Both participants should reconnect and retry.",
-            ),
-          ),
-        45000,
-      );
+
+  async function capture(at: number, run: Run) {
     setState("capturing");
     while (Date.now() < at) {
-      if (!alive.current || !peer.current?.open)
-        throw new Error("Connection lost during countdown.");
+      if (sequence.current !== run) throw new Error("Capture stopped.");
       setCount(Math.max(1, Math.ceil((at - Date.now()) / 1000)));
       await delay(Math.min(100, Math.max(0, at - Date.now())));
     }
+    if (sequence.current !== run) throw new Error("Capture stopped.");
     setCount(null);
-    shot.local = captureRef.current();
     setState("processing");
-    await combine(shotId);
-    await peer.current.sendPhoto(shotId, shot.local);
+    return captureRef.current();
   }
+
   async function connect() {
     if (
       !room ||
@@ -265,7 +254,9 @@ export function Room() {
     clearShots();
     setReady(false);
     readyRef.current = false;
-    setPartnerReady(false);
+    setRemoteReady({});
+    setOpenIds([]);
+    setStreams({});
     setMic(false);
     setMicGranted(false);
     setState("connecting");
@@ -274,84 +265,151 @@ export function Room() {
         await previous.dispose();
         if (!alive.current || peer.current !== previous) return;
       }
-      const p = new BoothPeer(
-        room,
-        uid,
-        room.members.find((m) => m.user_id !== uid)?.user_id || null,
-        camera.stream,
-        {
-          state: (s) => {
-            if (alive.current) {
-              setState(s);
-              if (s === "disconnected") {
-                setReady(false);
-                readyRef.current = false;
-                setPartnerReady(false);
-              }
-            }
-          },
-          remote: (s) => {
-            if (remoteVideo.current) {
-              remoteVideo.current.srcObject = s;
-              void remoteVideo.current.play().catch(() => {});
-            }
-          },
-          presence: setPresent,
-          error: failure,
-          photo: (shotId, data) => {
-            if (!shots.current.has(shotId)) return;
-            shots.current.get(shotId)!.remote = data;
-            void combine(shotId);
-          },
-          message: (m) => {
-            if (m.type === "ready") {
-              setPartnerReady(m.value === true);
-            }
-            if (m.type === "reset" && !hostRef.current) {
-              clearShots();
-              completed.current = [];
-              setPhotos([]);
-              setSessionComplete(false);
-              setExpectedPhotos(
-                [2, 3, 4, 6].includes(Number(m.count)) ? Number(m.count) : 4,
-              );
-              sequence.current = false;
-            }
-            if (m.type === "schedule" && !hostRef.current) {
-              if (
-                !readyRef.current ||
-                typeof m.id !== "string" ||
-                typeof m.at !== "number" ||
-                Math.abs(Number(m.at) - p.remoteOffset - Date.now()) > 20000
-              ) {
-                failure(
-                  new Error(
-                    "Shared timing was invalid or the camera was not ready.",
-                  ),
-                );
-                return;
-              }
-              sequence.current = true;
-              void take(
-                m.id,
-                Number(m.at) - p.remoteOffset,
-                m.layout === "stack" ? "stack" : "side",
-              ).catch((e) => failure(e));
-            }
-            if (m.type === "complete" && !hostRef.current) {
-              sequence.current = false;
-              setSessionComplete(true);
-              setState("completed");
-            }
-            if (m.type === "closed") {
-              setState("expired");
-              setError("Your host closed this room.");
-              peer.current?.dispose();
-              camera.stop();
-            }
-          },
+      const host = room.host_id;
+      const p = new BoothPeer(room, uid, camera.stream, {
+        state: (state) => {
+          if (alive.current && !sequence.current) setState(state);
         },
-      );
+        presence: (ids) => {
+          setPresent(ids);
+          void rpc<RoomDetail>("room_status", { p_id: room.id })
+            .then((detail) => {
+              if (peer.current === p && alive.current) setRoom(detail);
+            })
+            .catch(() => {});
+        },
+        connection: (member, open) => {
+          setOpenIds((ids) =>
+            open
+              ? [...new Set([...ids, member])]
+              : ids.filter((id) => id !== member),
+          );
+          if (open) {
+            if (readyRef.current)
+              p.send([member], { type: "ready", value: true });
+            return;
+          }
+          setRemoteReady((ready) => ({ ...ready, [member]: false }));
+          if (sequence.current?.guests.includes(member))
+            failure(
+              new Error(
+                "A camera left during capture. Reconnect and start again.",
+              ),
+            );
+        },
+        remote: (member, stream) =>
+          setStreams((current) => {
+            const next = { ...current };
+            if (stream) next[member] = stream;
+            else delete next[member];
+            return next;
+          }),
+        error: failure,
+        photo: (member, shotId, data) => {
+          const shot = shots.current.get(shotId);
+          const run = sequence.current;
+          if (!shot || !run || !run.guests.includes(member)) return;
+          if (uid === host) {
+            shot.photos.set(member, data);
+            if (run.guests.every((guest) => shot.photos.has(guest)))
+              shot.resolve?.();
+          } else {
+            clearTimeout(shot.timer);
+            shots.current.delete(shotId);
+            appendPhoto(data);
+          }
+        },
+        message: (member, message) => {
+          if (message.type === "ready") {
+            setRemoteReady((ready) => ({
+              ...ready,
+              [member]: message.value === true,
+            }));
+            return;
+          }
+          if (message.type === "closed" && member === host) {
+            clearShots();
+            setState("expired");
+            setError("Your host closed this room.");
+            p.dispose();
+            camera.stop();
+            return;
+          }
+          if (
+            message.type === "abort" &&
+            sequence.current?.id === message.run &&
+            sequence.current?.guests.includes(member)
+          ) {
+            failure(
+              new Error(
+                "The shared capture stopped. Start again when everyone is ready.",
+              ),
+            );
+            return;
+          }
+          if (uid === host || member !== host) return;
+          if (
+            message.type === "reset" &&
+            typeof message.run === "string" &&
+            readyRef.current
+          ) {
+            clearShots();
+            sequence.current = { id: message.run, guests: [host] };
+            setWorking(true);
+            setState("capturing");
+            completed.current = [];
+            setPhotos([]);
+            setSessionComplete(false);
+            setExpectedPhotos(
+              [2, 3, 4, 6].includes(Number(message.count))
+                ? Number(message.count)
+                : 4,
+            );
+            return;
+          }
+          const run = sequence.current;
+          if (!run || message.run !== run.id) return;
+          if (message.type === "complete") {
+            clearShots();
+            setSessionComplete(true);
+            setState("completed");
+          }
+          if (message.type === "schedule") {
+            const { id: shotId, at } = message;
+            const localTime =
+              typeof at === "number" ? at - p.offset(host) : NaN;
+            if (
+              !readyRef.current ||
+              typeof shotId !== "string" ||
+              !Number.isFinite(localTime) ||
+              Math.abs(localTime - Date.now()) > 20000 ||
+              shots.current.size > 0
+            ) {
+              failure(
+                new Error(
+                  "Shared timing was invalid or the camera was not ready.",
+                ),
+              );
+              return;
+            }
+            shots.current.set(shotId, {
+              photos: new Map(),
+              timer: setTimeout(
+                () => failure(new Error("The group photo did not arrive.")),
+                60000,
+              ),
+            });
+            void capture(localTime, run)
+              .then((photo) => {
+                if (sequence.current === run)
+                  return p.sendPhoto([host], shotId, photo);
+              })
+              .catch((e) => {
+                if (sequence.current === run) failure(e);
+              });
+          }
+        },
+      });
       peer.current = p;
       await p.connect();
     } catch (e) {
@@ -360,6 +418,7 @@ export function Room() {
       connecting.current = false;
     }
   }
+
   const autoConnect = useEffectEvent(() => {
     if (!peer.current) void connect();
   });
@@ -367,96 +426,109 @@ export function Room() {
     if (room?.id === id && uid && camera.ready && online) autoConnect();
   }, [room?.id, id, uid, camera.ready, online]);
 
-  useEffect(() => {
-    if (camera.ready || !readyRef.current) return;
-    readyRef.current = false;
-    setReady(false);
-    if (peer.current?.open) {
+  function publishReady(value: boolean) {
+    readyRef.current = value;
+    setReady(value);
+    if (!value && sequence.current) {
+      failure(
+        new Error(
+          "A camera became unavailable. Start again when everyone is ready.",
+        ),
+      );
+    }
+    for (const member of openIds) {
       try {
-        peer.current.send({ type: "ready", value: false });
+        peer.current?.send([member], { type: "ready", value });
       } catch {
-        // A closed data channel resets readiness on both sides.
+        // A closed link clears its readiness independently.
       }
     }
-  }, [camera.ready]);
-  function markReady() {
-    try {
-      if (!cameraOn || !camera.ready)
-        throw new Error("Turn your camera on first.");
-      if (!peer.current?.open)
-        throw new Error("Connect with your partner first.");
-      peer.current.send({ type: "ready", value: !ready });
-      setReady(!ready);
-      readyRef.current = !ready;
-      if (!ready) setState("ready");
-      else setState("connected");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not mark ready.");
-    }
   }
+
+  const cameraUnavailable = useEffectEvent(() => publishReady(false));
+  useEffect(() => {
+    if (!camera.ready && readyRef.current) cameraUnavailable();
+  }, [camera.ready]);
+
+  const guests = present.filter((member) => member !== uid);
+  const connected =
+    guests.length > 0 && guests.every((member) => openIds.includes(member));
+  const groupReady = connected && guests.every((member) => remoteReady[member]);
+
   async function start() {
+    const p = peer.current;
     if (
       sequence.current ||
       !isHost ||
       !ready ||
       !camera.ready ||
-      !partnerReady ||
-      !peer.current?.open
+      !groupReady ||
+      !p?.open
     )
       return;
-    sequence.current = true;
+    const run = { id: crypto.randomUUID(), guests };
+    const members = [uid, ...guests];
+    if (activeLayout === "spotlight" && members.includes(spotlight)) {
+      members.splice(members.indexOf(spotlight), 1);
+      members.unshift(spotlight);
+    }
+    const count = booth.settings.count;
+    sequence.current = run;
+    setWorking(true);
     setError("");
-    clearShots();
     completed.current = [];
     setPhotos([]);
     setSessionComplete(false);
-    setExpectedPhotos(booth.settings.count);
+    setExpectedPhotos(count);
     try {
-      peer.current.send({ type: "reset", count: booth.settings.count });
-      for (let i = 0; i < booth.settings.count; i++) {
-        if (!sequence.current) throw new Error("Capture stopped.");
-        const shotId = crypto.randomUUID(),
-          at =
-            Date.now() +
-            booth.settings.countdown * 1000 +
-            Math.max(300, peer.current.latency * 2);
-        const paired = new Promise<string>((resolve, reject) => {
-          const timer = setTimeout(
-            () =>
-              reject(
-                new Error(
-                  "Waiting for the other camera timed out. Reconnect and retry.",
-                ),
-              ),
-            45000,
-          );
+      p.send(guests, { type: "reset", run: run.id, count });
+      for (let i = 0; i < count; i++) {
+        const shotId = crypto.randomUUID();
+        const at =
+          Date.now() +
+          booth.settings.countdown * 1000 +
+          Math.max(300, p.latency * 2);
+        const incoming = new Map<string, string>();
+        const received = new Promise<void>((resolve) => {
           shots.current.set(shotId, {
+            photos: incoming,
             resolve,
-            reject,
-            timer,
-            layout: layoutRef.current,
+            timer: setTimeout(
+              () =>
+                failure(
+                  new Error(
+                    "A guest photo did not arrive. Reconnect and try again.",
+                  ),
+                ),
+              45000,
+            ),
           });
         });
-        void paired.catch(() => {});
-        peer.current.send({
-          type: "schedule",
-          id: shotId,
-          at,
-          layout: layoutRef.current,
-        });
-        await take(shotId, at, layoutRef.current);
-        await paired;
+        p.send(guests, { type: "schedule", run: run.id, id: shotId, at });
+        incoming.set(uid, await capture(at, run));
+        await received;
+        if (sequence.current !== run) return;
+        clearTimeout(shots.current.get(shotId)?.timer);
+        shots.current.delete(shotId);
+        const result = await composeGroup(
+          members.map((member) => incoming.get(member)!),
+          activeLayout,
+        );
+        if (sequence.current !== run) return;
+        await p.sendPhoto(guests, shotId, result);
+        if (sequence.current !== run) return;
+        appendPhoto(result);
       }
-      peer.current.send({ type: "complete" });
+      p.send(guests, { type: "complete", run: run.id });
+      clearShots();
       setSessionComplete(true);
       setState("completed");
     } catch (e) {
-      failure(e instanceof Error ? e : new Error("Shared capture failed."));
-    } finally {
-      sequence.current = false;
-      setCount(null);
+      if (sequence.current === run)
+        failure(e instanceof Error ? e : new Error("Shared capture failed."));
     }
   }
+
   async function close() {
     try {
       await peer.current?.closeRoom();
@@ -469,13 +541,11 @@ export function Room() {
     }
   }
   const invitation = `${location.origin}/join/${id}${location.hash}`;
-  const connected = !!peer.current?.open;
-  const working = state === "capturing" || state === "processing";
   return (
     <section className="page room-page">
       <div className="capture-heading">
         <div>
-          <span className="eyebrow">A PRIVATE LITTLE ROOM FOR TWO</span>
+          <span className="eyebrow">A PRIVATE BOOTH FOR UP TO FIVE</span>
           <h1>{room?.name || "Opening your little booth…"}</h1>
         </div>
         <span
@@ -500,7 +570,7 @@ export function Room() {
         <>
           <div className="room-invitation">
             <span>
-              <UsersRound size={18} /> {present.length || 1}/2 in the booth
+              <UsersRound size={18} /> {present.length || 1}/5 in the booth
             </span>
             <input
               readOnly
@@ -525,7 +595,9 @@ export function Room() {
               {copied ? "Copied" : "Copy invite"}
             </button>
           </div>
-          <div className={`room-cameras ${layout}`}>
+          <div
+            className={`room-cameras ${previewStack ? "stack" : guests.length >= 2 ? "group" : ""}`}
+          >
             <div className="room-video camera-stage">
               <video
                 className="mirrored"
@@ -552,27 +624,31 @@ export function Room() {
                 {isHost ? "· host" : ""}
               </span>
             </div>
-            <div className="room-video camera-stage">
-              <video ref={remoteVideo} autoPlay playsInline />
-              {!connected && (
-                <div className="camera-empty">
-                  <UsersRound size={38} />
-                  <h3>
-                    {state === "connecting"
-                      ? "Finding your person…"
-                      : "A little space for your person"}
-                  </h3>
-                  <p>
-                    Both people need to open the room and enable their cameras.
-                  </p>
-                </div>
-              )}
-              <span className="camera-caption">
-                {room.members.find((m) => m.user_id !== uid)?.nickname ||
-                  "Your person"}{" "}
-                {partnerReady ? "· ready" : "· getting ready"}
-              </span>
-            </div>
+
+            {(guests.length ? guests : [""]).map((member, index) => (
+              <div className="room-video camera-stage" key={member}>
+                <RemoteCamera stream={streams[member]} />
+                {!streams[member] && (
+                  <div className="camera-empty">
+                    <UsersRound size={32} />
+                    <h3>
+                      {member ? "Connecting camera…" : "Waiting for friends"}
+                    </h3>
+                    {!member && (
+                      <p>Share the private link to invite up to four guests.</p>
+                    )}
+                  </div>
+                )}
+                {member && (
+                  <span className="camera-caption">
+                    {room.members.find((m) => m.user_id === member)?.nickname ||
+                      `Guest ${index + 1}`}
+                    {member === room.host_id ? " · host" : ""}
+                    {remoteReady[member] ? " · ready" : ""}
+                  </span>
+                )}
+              </div>
+            ))}
             {count !== null && (
               <div
                 className="countdown-overlay"
@@ -593,16 +669,12 @@ export function Room() {
             <button
               className="button secondary small"
               disabled={
-                !camera.ready ||
-                !online ||
-                working ||
-                state === "connecting" ||
-                state === "expired"
+                !camera.ready || !online || working || state === "expired"
               }
               onClick={() => void connect()}
             >
               <RefreshCw size={16} />
-              {connected ? "Reconnect" : "Connect with your person"}
+              {present.length > 0 ? "Reconnect" : "Connect cameras"}
             </button>
             <button
               className="icon-button"
@@ -613,13 +685,7 @@ export function Room() {
                   ?.getVideoTracks()
                   .forEach((t) => (t.enabled = !cameraOn));
                 setCameraOn(!cameraOn);
-                setReady(false);
-                readyRef.current = false;
-                try {
-                  peer.current?.send({ type: "ready", value: false });
-                } catch {
-                  /* Reconnect is shown in controls. */
-                }
+                publishReady(false);
               }}
             >
               {cameraOn ? <Video size={20} /> : <VideoOff size={20} />}
@@ -651,7 +717,7 @@ export function Room() {
               className="icon-button"
               disabled={working}
               aria-label="Switch camera layout"
-              onClick={() => setLayout(layout === "side" ? "stack" : "side")}
+              onClick={() => setPreviewStack((stack) => !stack)}
             >
               <LayoutTemplate size={20} />
             </button>
@@ -660,7 +726,7 @@ export function Room() {
               className={`button ${ready ? "secondary" : "primary"} small`}
               disabled={!connected || working || !cameraOn || !camera.ready}
               aria-pressed={ready}
-              onClick={markReady}
+              onClick={() => publishReady(!ready)}
             >
               <Check size={17} />
               {ready ? "You’re ready" : "I’m ready"}
@@ -670,7 +736,7 @@ export function Room() {
                 className="button primary small"
                 disabled={
                   !ready ||
-                  !partnerReady ||
+                  !groupReady ||
                   !connected ||
                   !camera.ready ||
                   working
@@ -685,12 +751,12 @@ export function Room() {
             {!camera.ready
               ? "Enable your camera to connect."
               : !connected
-                ? "Waiting for both cameras to connect. If testing on one computer, use a separate browser profile for your guest."
+                ? "Waiting for the other cameras to connect."
                 : !ready
                   ? "Press I’m ready when you’re in position."
-                  : !partnerReady
-                    ? "Waiting for your partner to press I’m ready."
-                    : "Both people are ready. The host can start the shared countdown."}
+                  : !groupReady
+                    ? "Waiting for everyone to press I’m ready."
+                    : "Everyone is ready. The host can start the shared countdown."}
           </p>
           {isHost && (
             <div className="room-capture-settings">
@@ -728,6 +794,54 @@ export function Room() {
               </label>
             </div>
           )}
+
+          {isHost && present.length >= 2 && (
+            <fieldset className="group-layouts" disabled={working}>
+              <legend>Group Polaroid layout</legend>
+              <div className="group-layout-options">
+                {(Object.keys(groupLayouts) as GroupLayout[])
+                  .filter((option) =>
+                    groupLayouts[option].sizes.includes(present.length),
+                  )
+                  .map((option) => (
+                    <button
+                      type="button"
+                      key={option}
+                      className="group-layout-option"
+                      aria-pressed={activeLayout === option}
+                      onClick={() => setLayout(option)}
+                    >
+                      <svg viewBox="0 0 1200 1200" aria-hidden="true">
+                        {groupTiles(present.length, option).map(
+                          (tile, index) => (
+                            <rect key={index} {...tile} rx="25" />
+                          ),
+                        )}
+                      </svg>
+                      {groupLayoutName(option, present.length)}
+                    </button>
+                  ))}
+              </div>
+              {activeLayout === "spotlight" && (
+                <label>
+                  Featured person
+                  <select
+                    value={
+                      [uid, ...guests].includes(spotlight) ? spotlight : uid
+                    }
+                    onChange={(e) => setSpotlight(e.target.value)}
+                  >
+                    {[uid, ...guests].map((member) => (
+                      <option key={member} value={member}>
+                        {room.members.find((m) => m.user_id === member)
+                          ?.nickname || (member === uid ? "You" : "Guest")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </fieldset>
+          )}
           {photos.length > 0 && (
             <div className="room-results">
               <h3>{photos.length} moments, made together.</h3>
@@ -743,7 +857,13 @@ export function Room() {
                     booth.reset();
                     booth.setMode("together");
                     booth.setPhotos(photos);
-                    booth.setEditor({ caption: room.name });
+                    booth.setEditor({
+                      caption: room.name,
+                      template: "polaroid",
+                      frame: "#fffaf5",
+                      sticker: "",
+                      polaroidMoment: 0,
+                    });
                     peer.current?.dispose();
                     camera.stop();
                     navigate("/editor");
@@ -765,8 +885,8 @@ export function Room() {
               </Link>
             )}
             <span className="small muted">
-              Invite-only · Photos sent directly to your partner · No cloud
-              photo storage
+              Invite-only · Photos shared with your group · No cloud photo
+              storage
             </span>
           </div>
         </>

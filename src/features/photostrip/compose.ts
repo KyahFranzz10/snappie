@@ -15,7 +15,9 @@ export const dimensions = (template: EditorSettings["template"]) =>
     ? { width: 600, height: 1800 }
     : template === "story"
       ? { width: 1080, height: 1920 }
-      : { width: 1800, height: 1200 };
+      : template === "polaroid"
+        ? { width: 1200, height: 1440 }
+        : { width: 1800, height: 1200 };
 export function imageFrom(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const i = new Image();
@@ -85,6 +87,10 @@ export function drawComposition(
     c.fillStyle = s.frame;
     c.fillRect(0, 0, w, h);
   }
+  const polaroid = s.template === "polaroid";
+  const featured = polaroid ? (s.polaroidMoment ?? -1) : -1;
+  const selected = sources[featured];
+  if (selected) sources = [selected];
   const dark = ["#302a36", "#9d3853"].includes(s.frame);
   c.fillStyle = dark ? "#fffaf5" : "#4c3340";
   const story = s.template === "story";
@@ -93,27 +99,37 @@ export function drawComposition(
   const bottom = story ? 210 : pad;
   const footer = story ? 180 : s.template === "strip" ? 180 : 160;
   const footerTop = h - (story ? bottom : 0) - footer;
-  const cols = story
-    ? sources.length > 3
-      ? 2
-      : 1
-    : s.template === "strip"
-      ? 1
-      : Math.ceil(sources.length / 2);
+  const cols = polaroid
+    ? Math.ceil(Math.sqrt(sources.length))
+    : story
+      ? sources.length > 3
+        ? 2
+        : 1
+      : s.template === "strip"
+        ? 1
+        : Math.ceil(sources.length / 2);
   const rows = Math.ceil(sources.length / cols);
   const gap = 16;
   const pw = (w - pad * 2 - gap * (cols - 1)) / cols,
-    ph = (h - top - bottom - footer - gap * (rows - 1)) / rows;
+    ph = polaroid ? pw : (h - top - bottom - footer - gap * (rows - 1)) / rows;
+  const photoTop = polaroid
+    ? top + (w - pad * 2 - (ph * rows + gap * (rows - 1))) / 2
+    : top;
   sources.forEach((source, i) => {
-    const transform = s.photoTransforms?.[i];
+    const transform = s.photoTransforms?.[selected ? featured : i];
     const rotatedSideways = (transform?.rotation ?? 0) % 180 !== 0;
     const width = rotatedSideways ? ph : pw;
     const height = rotatedSideways ? pw : ph;
     c.save();
     c.filter = filterCSS(s);
+    const rowSize = Math.min(
+      cols,
+      sources.length - Math.floor(i / cols) * cols,
+    );
+    const inset = polaroid ? ((cols - rowSize) * (pw + gap)) / 2 : 0;
     c.translate(
-      pad + (i % cols) * (pw + gap) + pw / 2,
-      top + Math.floor(i / cols) * (ph + gap) + ph / 2,
+      pad + inset + (i % cols) * (pw + gap) + pw / 2,
+      photoTop + Math.floor(i / cols) * (ph + gap) + ph / 2,
     );
     if (transform?.flipped) c.scale(-1, 1);
     if (transform?.rotation) c.rotate((transform.rotation * Math.PI) / 180);
@@ -130,10 +146,23 @@ export function drawComposition(
     c.restore();
   });
   c.textAlign = "center";
-  c.font = `${s.template === "strip" ? 40 : 48}px Georgia`;
-  c.fillText("snappie", w / 2, footerTop + 45);
+  if (polaroid) {
+    const style = s.polaroidStyle ?? "classic";
+    if (style === "postmark") {
+      c.strokeStyle = c.fillStyle;
+      c.strokeRect(w / 2 - 108, h - 221, 216, 46);
+      c.font = "22px monospace";
+      c.fillText("SNAPPIE PRINT", w / 2, h - 191);
+    }
+    c.font = style === "classic" ? "italic 58px Georgia" : "42px sans-serif";
+    c.fillText(s.caption.slice(0, 65), w / 2, h - 112, w - pad * 2);
+  } else {
+    c.font = `${s.template === "strip" ? 40 : 48}px Georgia`;
+    c.fillText("snappie", w / 2, footerTop + 45);
+    c.font = `${s.template === "strip" ? 18 : 28}px sans-serif`;
+    c.fillText(s.caption.slice(0, 65), w / 2, footerTop + 84, w - pad * 2);
+  }
   c.font = `${s.template === "strip" ? 18 : 28}px sans-serif`;
-  c.fillText(s.caption.slice(0, 65), w / 2, footerTop + 84, w - pad * 2);
   if (s.date)
     c.fillText(
       (s.dateValue
@@ -172,32 +201,6 @@ export function drawComposition(
     c.drawImage(logoImage, pad, story ? h - bottom - 70 : h - 100, 70, 70);
   }
 }
-export async function pairPhotos(
-  a: string,
-  b: string,
-  layout: "side" | "stack",
-) {
-  const images = await Promise.all([imageFrom(a), imageFrom(b)]);
-  const c = document.createElement("canvas");
-  c.width = 1200;
-  c.height = 900;
-  const ctx = c.getContext("2d")!;
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  images.forEach((im, i) =>
-    cover(
-      ctx,
-      im,
-      im.width,
-      im.height,
-      layout === "side" ? i * 600 : 0,
-      layout === "stack" ? i * 450 : 0,
-      layout === "side" ? 600 : 1200,
-      layout === "side" ? 900 : 450,
-    ),
-  );
-  return c.toDataURL("image/jpeg", 0.94);
-}
 export async function downloadCanvas(
   canvas: HTMLCanvasElement,
   type: "png" | "jpeg",
@@ -227,7 +230,7 @@ export function printCanvas(
   const doc = frame.contentDocument!;
   doc.open();
   doc.write(
-    `<!doctype html><html><head><title>Snappie</title><style>@page{size:${template === "strip" ? "2in 6in" : "6in 4in"};margin:0}body{margin:0}img{display:block;width:100%;height:auto}</style></head><body><img alt="Your photostrip" src="${canvas.toDataURL("image/png")}"></body></html>`,
+    `<!doctype html><html><head><title>Snappie</title><style>@page{size:${template === "strip" ? "2in 6in" : template === "polaroid" ? "4in 4.8in" : "6in 4in"};margin:0}body{margin:0}img{display:block;width:100%;height:auto}</style></head><body><img alt="Your photostrip" src="${canvas.toDataURL("image/png")}"></body></html>`,
   );
   doc.close();
   const img = doc.querySelector("img")!;

@@ -239,12 +239,12 @@ export function ModeCards() {
           A little closer, together <ArrowUpRight size={22} />
         </h3>
         <p>
-          Miles apart, side by side. Invite your person
+          Miles apart, side by side. Invite your friends
           <br />
           into a private booth and pose together.
         </p>
         <span className="card-bottom">
-          Made for two <span>02 / ONLINE TOGETHER</span>
+          Made for up to five <span>02 / ONLINE TOGETHER</span>
         </span>
       </Link>
       <Link className="mode-card event-card" to="/kiosk">

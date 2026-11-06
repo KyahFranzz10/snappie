@@ -11,6 +11,13 @@ import { useState } from "react";
 import { useBooth } from "../stores/booth";
 import { loadDraft } from "../services/storage/drafts";
 import type { ShotCount } from "../types";
+
+const keepsakes = [
+  { template: "strip", name: "The classic strip", size: "2 × 6 in" },
+  { template: "postcard", name: "The little postcard", size: "4 × 6 in" },
+  { template: "polaroid", name: "Instant Polaroid", size: "4 × 4.8 in" },
+] as const;
+
 export function Setup() {
   const {
     settings,
@@ -23,6 +30,14 @@ export function Setup() {
   } = useBooth();
   const navigate = useNavigate();
   const [error, setError] = useState("");
+  const [singlePrint, setSinglePrint] = useState(false);
+  const polaroid = settings.template === "polaroid";
+  const tileCount = polaroid && singlePrint ? 1 : settings.count;
+  const columns = polaroid
+    ? Math.ceil(Math.sqrt(tileCount))
+    : settings.template === "postcard"
+      ? Math.ceil(tileCount / 2)
+      : 1;
   async function restore() {
     try {
       const d = await loadDraft();
@@ -89,37 +104,56 @@ export function Setup() {
               <LayoutTemplate size={18} /> Pick your keepsake
             </h3>
             <div className="template-options">
-              {(["strip", "postcard"] as const).map((t) => (
+              {keepsakes.map(({ template, name, size }) => (
                 <button
-                  className={settings.template === t ? "selected" : ""}
-                  key={t}
-                  onClick={() => setSettings({ template: t })}
+                  aria-pressed={settings.template === template}
+                  className={settings.template === template ? "selected" : ""}
+                  key={template}
+                  onClick={() => setSettings({ template })}
                 >
-                  <div className={`layout-icon ${t}`}>
-                    {Array.from({ length: settings.count }, (_, i) => (
-                      <i key={i} />
-                    ))}
+                  <div className={`layout-icon ${template}`} aria-hidden="true">
+                    {Array.from(
+                      { length: template === "polaroid" ? 1 : settings.count },
+                      (_, i) => (
+                        <i key={i} />
+                      ),
+                    )}
                   </div>
-                  <strong>
-                    {t === "strip"
-                      ? "The classic strip"
-                      : "The little postcard"}
-                  </strong>
-                  <small>
-                    {t === "strip"
-                      ? "2 × 6 inches · 600 × 1800 px"
-                      : "4 × 6 inches · 1800 × 1200 px"}
-                  </small>
+                  <strong>{name}</strong>
+                  <small>{size}</small>
                 </button>
               ))}
             </div>
+            {polaroid && (
+              <label className="setup-print-arrangement">
+                Polaroid arrangement
+                <select
+                  value={singlePrint ? "single" : "sheet"}
+                  onChange={(event) =>
+                    setSinglePrint(event.target.value === "single")
+                  }
+                >
+                  <option value="sheet">Contact sheet · all moments</option>
+                  <option value="single">
+                    Single print · choose a moment in the editor
+                  </option>
+                </select>
+              </label>
+            )}
           </div>
           <button
             className="button primary full"
             onClick={() => {
               reset();
               setMode("solo");
-              setEditor({ template: settings.template });
+              setEditor({
+                template: settings.template,
+                ...(polaroid && {
+                  frame: "#fffaf5",
+                  sticker: "",
+                  polaroidMoment: singlePrint ? 0 : undefined,
+                }),
+              });
               navigate("/capture");
             }}
           >
@@ -138,13 +172,20 @@ export function Setup() {
           )}
         </div>
         <aside className="setup-aside">
-          <div className="big-layout" style={{ background: "#f4dce3" }}>
-            {Array.from({ length: settings.count }, (_, i) => (
-              <div key={i}>
-                <Camera size={27} />
-                <small>0{i + 1}</small>
-              </div>
-            ))}
+          <div className={`big-layout ${settings.template}`} aria-hidden="true">
+            <div
+              className="setup-preview-tiles"
+              style={{
+                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+              }}
+            >
+              {Array.from({ length: tileCount }, (_, i) => (
+                <span key={i}>
+                  <Camera size={27} />
+                  <small>0{i + 1}</small>
+                </span>
+              ))}
+            </div>
             <strong>snappie ✳</strong>
             <small>your good side is every side</small>
           </div>

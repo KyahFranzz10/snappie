@@ -135,12 +135,12 @@ export function Together({ join = false }: { join?: boolean }) {
       <div className="page-title">
         <span className="eyebrow">DIFFERENT PLACES. SAME MOMENT.</span>
         <h1>
-          {join ? "Your person is waiting." : "A little closer, together."}
+          {join ? "Your group is waiting." : "A little closer, together."}
         </h1>
         <p>
           {join
-            ? "One link. Two people. A memory you both get to keep."
-            : "A private photobooth for you and your favorite faraway person."}
+            ? "One link. Up to five people. A group Polaroid everyone can keep."
+            : "A private photobooth for you and your friends, wherever you are."}
         </p>
       </div>
       <div className="together-grid">
@@ -151,7 +151,7 @@ export function Together({ join = false }: { join?: boolean }) {
           <h2>
             {join
               ? preview?.name || "Join a private booth"
-              : "Make a little room for two"}
+              : "Make a little room for your group"}
           </h2>
           {!configured && (
             <div className="notice-block">
@@ -250,8 +250,8 @@ export function Together({ join = false }: { join?: boolean }) {
             </button>
           </form>
           <p className="small muted">
-            <LockKeyhole size={13} /> Invite-only. Two people. No automatic
-            uploads.
+            <LockKeyhole size={13} /> Invite-only. Up to five people. No
+            automatic uploads.
           </p>
           {error && (
             <p className="error" role="alert">
@@ -268,7 +268,7 @@ export function Together({ join = false }: { join?: boolean }) {
             <span>♡</span>
             <div>
               <img src="/images/smile.jpg" alt="Portrait inspiration" />
-              <span>your person</span>
+              <span>your guests</span>
             </div>
           </div>
           <h3>
@@ -278,7 +278,7 @@ export function Together({ join = false }: { join?: boolean }) {
           </h3>
           <p>
             See each other live, share a countdown, and create one keepsake from
-            both cameras.
+            everyone’s camera.
           </p>
           <p className="small muted">
             Camera permission comes next. Microphone access is always a separate

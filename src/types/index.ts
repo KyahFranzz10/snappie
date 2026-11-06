@@ -1,5 +1,5 @@
 export type ShotCount = 2 | 3 | 4 | 6;
-export type Template = "strip" | "postcard" | "story";
+export type Template = "strip" | "postcard" | "story" | "polaroid";
 export type Filter = "original" | "mono" | "vintage" | "warm" | "cool" | "film";
 export interface PhotoTransform {
   rotation: number;
@@ -19,6 +19,8 @@ export interface EditorSettings {
   text: string;
   textX: number;
   textY: number;
+  polaroidMoment?: number;
+  polaroidStyle?: "classic" | "postmark" | "minimal";
   photoTransforms?: (PhotoTransform | null)[];
 }
 export interface BoothSettings {

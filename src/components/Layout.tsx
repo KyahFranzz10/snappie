@@ -57,7 +57,7 @@ export function Layout() {
         <nav aria-label="Main navigation">
           <NavLink to="/modes">The photobooth</NavLink>
           <NavLink to="/together">
-            Online together <span className="tiny-badge">FOR TWO</span>
+            Online together <span className="tiny-badge">UP TO FIVE</span>
           </NavLink>
           <NavLink to="/kiosk">For events</NavLink>
         </nav>

@@ -8,6 +8,7 @@ import {
   LockKeyhole,
 } from "lucide-react";
 import { useBooth } from "../stores/booth";
+import type { Template } from "../types";
 export async function hashPin(pin: string) {
   const data = new TextEncoder().encode(`snapbooth-kiosk:${pin}`);
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", data)))
@@ -91,6 +92,10 @@ export function Kiosk() {
               caption: kiosk.event,
               dateValue: kiosk.date,
               template: settings.template,
+              ...(settings.template === "polaroid" && {
+                frame: "#fffaf5",
+                sticker: "",
+              }),
             });
             navigate("/capture");
           }}
@@ -263,12 +268,13 @@ export function KioskSettings() {
                     value={settings.template}
                     onChange={(e) =>
                       setSettings({
-                        template: e.target.value as "strip" | "postcard",
+                        template: e.target.value as Template,
                       })
                     }
                   >
                     <option value="strip">2 × 6 inch photostrip</option>
                     <option value="postcard">4 × 6 inch postcard</option>
+                    <option value="polaroid">4 × 4.8 inch Polaroid</option>
                   </select>
                 </label>
               </>

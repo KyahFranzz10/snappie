@@ -5,9 +5,10 @@ describe("print composition settings", () => {
   it("exports a full-height 9:16 social story", () => {
     expect(dimensions("story")).toEqual({ width: 1080, height: 1920 });
   });
-  it("uses 300 pixels/inch for both supported paper formats", () => {
+  it("uses 300 pixels/inch for all supported paper formats", () => {
     expect(dimensions("strip")).toEqual({ width: 600, height: 1800 });
     expect(dimensions("postcard")).toEqual({ width: 1800, height: 1200 });
+    expect(dimensions("polaroid")).toEqual({ width: 1200, height: 1440 });
   });
   it("combines the selected look with all manual adjustments", () => {
     expect(

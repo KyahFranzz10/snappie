@@ -29,11 +29,8 @@ function channel(client, id, isPrivate = true) {
 function subscribe(ch) {
   return new Promise((resolve) => ch.subscribe(resolve, 8000));
 }
-const [host, guest, extra] = await Promise.all([
-  identity(),
-  identity(),
-  identity(),
-]);
+const clients = await Promise.all(Array.from({ length: 6 }, identity));
+const [host, guest, extra] = clients;
 const secret = randomBytes(32).toString("hex");
 const { data: id, error: createError } = await host.rpc("create_room", {
   p_name: "Staging authorization test",
@@ -89,7 +86,7 @@ try {
     "Null invitation must fail",
   );
   const attempts = await Promise.all(
-    [guest, extra].map((c) =>
+    clients.slice(1).map((c) =>
       c.rpc("join_room", {
         p_id: id,
         p_secret: secret,
@@ -99,14 +96,18 @@ try {
     ),
   );
   assert.equal(
-    attempts.filter((a) => !a.error).length,
-    1,
-    "Exactly one concurrent guest can join",
+    attempts.filter((a) => !a.error && a.data === null).length,
+    4,
+    "Exactly four concurrent guests can join",
   );
-  const joined = attempts[0].error ? extra : guest;
+  const joined =
+    clients[
+      1 +
+        attempts.findIndex((attempt) => !attempt.error && attempt.data === null)
+    ];
   const { data: status, error } = await joined.rpc("room_status", { p_id: id });
   if (error) throw error;
-  assert.equal(status.members.length, 2);
+  assert.equal(status.members.length, 5);
   assert.ok(
     (await joined.rpc("close_room", { p_id: id })).error,
     "Guest cannot close room",
@@ -206,7 +207,7 @@ try {
   );
 } finally {
   await host.rpc("close_room", { p_id: id });
-  for (const client of [host, guest, extra]) {
+  for (const client of clients) {
     await client.removeAllChannels();
     await client.auth.signOut();
   }

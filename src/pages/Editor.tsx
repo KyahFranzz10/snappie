@@ -18,9 +18,17 @@ import { PhotoStripPreview } from "../components/PhotoStripPreview";
 import { MotionClips } from "../components/MotionClips";
 import { downloadCanvas, printCanvas } from "../features/photostrip/compose";
 import { saveDraft, deleteDraft } from "../services/storage/drafts";
-import type { Filter, PhotoTransform, Template } from "../types";
+import type {
+  EditorSettings,
+  Filter,
+  PhotoTransform,
+  Template,
+} from "../types";
 const originalOrientation: PhotoTransform = { rotation: 0, flipped: false };
 const frames = [
+  ["Instant ivory", "#fffaf5"],
+  ["Buttercream", "#ffebbd"],
+  ["Sage paper", "#dce9dc"],
   ["Petal", "#f4dce3"],
   ["Cream", "#fff8e9"],
   ["Lilac", "#e3dcf4"],
@@ -204,7 +212,9 @@ export function Editor({ result = false }: { result?: boolean }) {
               ? "600 × 1800 px · 2 × 6 in"
               : editor.template === "story"
                 ? "1080 × 1920 px · 9:16 story"
-                : "1800 × 1200 px · 4 × 6 in"}{" "}
+                : editor.template === "polaroid"
+                  ? "1200 × 1440 px · 4 × 4.8 in"
+                  : "1800 × 1200 px · 4 × 6 in"}{" "}
             {editor.template !== "story" && "· 300 px/in"}
           </div>
           <p className="handwritten">looks like a good memory ♡</p>
@@ -230,6 +240,7 @@ export function Editor({ result = false }: { result?: boolean }) {
                 >
                   <option value="strip">Classic 2 × 6 strip</option>
                   <option value="postcard">4 × 6 postcard</option>
+                  <option value="polaroid">Instant Polaroid</option>
                   <option value="story">
                     Facebook / Instagram Story · 1080 × 1920
                   </option>
@@ -462,12 +473,55 @@ export function Editor({ result = false }: { result?: boolean }) {
                   >
                     <option value="strip">Classic 2 × 6 strip</option>
                     <option value="postcard">4 × 6 postcard</option>
+                    <option value="polaroid">Instant Polaroid</option>
                     <option value="story">
                       Facebook / Instagram Story · 1080 × 1920
                     </option>
                   </select>
                 </label>
               </div>
+              {editor.template === "polaroid" && (
+                <div className="field-group">
+                  <h3>Instant print details</h3>
+                  <label>
+                    Print arrangement
+                    <select
+                      value={editor.polaroidMoment ?? ""}
+                      onChange={(e) =>
+                        setEditor({
+                          polaroidMoment:
+                            e.target.value === ""
+                              ? undefined
+                              : Number(e.target.value),
+                        })
+                      }
+                    >
+                      <option value="">Contact sheet · all moments</option>
+                      {photos.map((_, index) => (
+                        <option value={index} key={index}>
+                          Single print · moment {index + 1}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Caption style
+                    <select
+                      value={editor.polaroidStyle ?? "classic"}
+                      onChange={(e) =>
+                        setEditor({
+                          polaroidStyle: e.target
+                            .value as EditorSettings["polaroidStyle"],
+                        })
+                      }
+                    >
+                      <option value="classic">Classic script</option>
+                      <option value="postmark">Studio postmark</option>
+                      <option value="minimal">Minimal type</option>
+                    </select>
+                  </label>
+                </div>
+              )}
               <div className="field-group">
                 <h3>
                   04 <span>Every moment, in its place</span>
