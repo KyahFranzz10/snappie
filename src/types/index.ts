@@ -1,6 +1,10 @@
 export type ShotCount = 2 | 3 | 4 | 6;
 export type Template = "strip" | "postcard" | "story";
 export type Filter = "original" | "mono" | "vintage" | "warm" | "cool" | "film";
+export interface PhotoTransform {
+  rotation: number;
+  flipped: boolean;
+}
 export interface EditorSettings {
   frame: string;
   filter: Filter;
@@ -15,6 +19,7 @@ export interface EditorSettings {
   text: string;
   textX: number;
   textY: number;
+  photoTransforms?: (PhotoTransform | null)[];
 }
 export interface BoothSettings {
   count: ShotCount;

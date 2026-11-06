@@ -1504,7 +1504,7 @@ input[type="file"] {
 }
 .reorder-photos > div {
   display: flex;
-  gap: 10px;
+  gap: 6px;
   align-items: center;
   background: var(--bg);
   padding: 7px;
@@ -1513,8 +1513,8 @@ input[type="file"] {
   cursor: grab;
 }
 .reorder-photos img {
-  width: 42px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   object-fit: cover;
   border-radius: 3px;
 }
@@ -1522,9 +1522,17 @@ input[type="file"] {
   flex: 1;
 }
 .reorder-photos button {
+  display: grid;
+  place-items: center;
+  min-width: 32px;
+  min-height: 32px;
   padding: 8px;
   border: 1px solid var(--line);
   border-radius: 4px;
+}
+.reorder-photos button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .success-medal {
   width: 70px;

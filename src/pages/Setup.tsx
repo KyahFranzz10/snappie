@@ -32,7 +32,7 @@ export function Setup() {
       }
       setPhotos(d.photos);
       setClips([]);
-      setEditor(d.editor);
+      setEditor({ ...d.editor, photoTransforms: d.editor.photoTransforms });
       navigate("/editor");
     } catch {
       setError("Draft storage is unavailable in this browser.");

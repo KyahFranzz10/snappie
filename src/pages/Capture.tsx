@@ -18,7 +18,8 @@ import {
 } from "../features/capture/motionClip";
 export function Capture() {
   const camera = useCamera();
-  const { settings, photos, clips, setPhotos, setClips, mode } = useBooth();
+  const { settings, photos, clips, setPhotos, setClips, setEditor, mode } =
+    useBooth();
   const navigate = useNavigate();
   const [count, setCount] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
@@ -375,6 +376,7 @@ export function Capture() {
             onClick={() => {
               setPhotos([]);
               setClips([]);
+              setEditor({ photoTransforms: undefined });
               setRetake(null);
             }}
           >

@@ -10,13 +10,16 @@ import {
   Sparkles,
   Trash2,
   Share2,
+  FlipHorizontal2,
+  RotateCw,
 } from "lucide-react";
 import { useBooth } from "../stores/booth";
 import { PhotoStripPreview } from "../components/PhotoStripPreview";
 import { MotionClips } from "../components/MotionClips";
 import { downloadCanvas, printCanvas } from "../features/photostrip/compose";
 import { saveDraft, deleteDraft } from "../services/storage/drafts";
-import type { Filter, Template } from "../types";
+import type { Filter, PhotoTransform, Template } from "../types";
+const originalOrientation: PhotoTransform = { rotation: 0, flipped: false };
 const frames = [
   ["Petal", "#f4dce3"],
   ["Cream", "#fff8e9"],
@@ -122,6 +125,22 @@ export function Editor({ result = false }: { result?: boolean }) {
       );
     }
   }
+  function orient(index: number, action: "flip" | "rotate") {
+    const transforms = Array.from(
+      { length: photos.length },
+      (_, i) => editor.photoTransforms?.[i] ?? null,
+    );
+    const current = transforms[index] ?? originalOrientation;
+    // A mirrored photo reverses the source rotation needed to turn clockwise.
+    transforms[index] =
+      action === "flip"
+        ? { ...current, flipped: !current.flipped }
+        : {
+            ...current,
+            rotation: (current.rotation + (current.flipped ? 270 : 90)) % 360,
+          };
+    setEditor({ photoTransforms: transforms });
+  }
   function move(from: number, to: number) {
     if (from === to) return;
     const next = [...photos];
@@ -135,6 +154,15 @@ export function Editor({ result = false }: { result?: boolean }) {
     const [clip] = nextClips.splice(from, 1);
     nextClips.splice(to, 0, clip || null);
     setClips(nextClips);
+    if (editor.photoTransforms) {
+      const transforms = Array.from(
+        { length: photos.length },
+        (_, i) => editor.photoTransforms?.[i] ?? null,
+      );
+      const [transform] = transforms.splice(from, 1);
+      transforms.splice(to, 0, transform ?? null);
+      setEditor({ photoTransforms: transforms });
+    }
   }
   if (!photos.length)
     return (
@@ -445,7 +473,8 @@ export function Editor({ result = false }: { result?: boolean }) {
                   04 <span>Every moment, in its place</span>
                 </h3>
                 <p className="small muted">
-                  Drag photos to rearrange, or use the arrow buttons.
+                  Flip or rotate each photo. Drag or use the arrows to change
+                  its order.
                 </p>
                 <div className="reorder-photos">
                   {photos.map((p, i) => (
@@ -460,8 +489,33 @@ export function Editor({ result = false }: { result?: boolean }) {
                       }}
                     >
                       <GripVertical size={14} />
-                      <img src={p} alt={`Moment ${i + 1}`} />
+                      <img
+                        src={p}
+                        alt={`Moment ${i + 1}`}
+                        style={{
+                          transform: `scaleX(${editor.photoTransforms?.[i]?.flipped ? -1 : 1}) rotate(${editor.photoTransforms?.[i]?.rotation ?? 0}deg)`,
+                        }}
+                      />
                       <span>{i + 1}</span>
+                      <button
+                        type="button"
+                        aria-label={`Flip photo ${i + 1} horizontally`}
+                        aria-pressed={
+                          editor.photoTransforms?.[i]?.flipped ?? false
+                        }
+                        title="Flip horizontally"
+                        onClick={() => orient(i, "flip")}
+                      >
+                        <FlipHorizontal2 size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Rotate photo ${i + 1} clockwise`}
+                        title="Rotate clockwise"
+                        onClick={() => orient(i, "rotate")}
+                      >
+                        <RotateCw size={15} />
+                      </button>
                       <button
                         aria-label={`Move photo ${i + 1} earlier`}
                         disabled={i === 0}

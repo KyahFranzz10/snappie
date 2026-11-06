@@ -105,17 +105,27 @@ export function drawComposition(
   const pw = (w - pad * 2 - gap * (cols - 1)) / cols,
     ph = (h - top - bottom - footer - gap * (rows - 1)) / rows;
   sources.forEach((source, i) => {
+    const transform = s.photoTransforms?.[i];
+    const rotatedSideways = (transform?.rotation ?? 0) % 180 !== 0;
+    const width = rotatedSideways ? ph : pw;
+    const height = rotatedSideways ? pw : ph;
     c.save();
     c.filter = filterCSS(s);
+    c.translate(
+      pad + (i % cols) * (pw + gap) + pw / 2,
+      top + Math.floor(i / cols) * (ph + gap) + ph / 2,
+    );
+    if (transform?.flipped) c.scale(-1, 1);
+    if (transform?.rotation) c.rotate((transform.rotation * Math.PI) / 180);
     cover(
       c,
       source.image,
       source.width,
       source.height,
-      pad + (i % cols) * (pw + gap),
-      top + Math.floor(i / cols) * (ph + gap),
-      pw,
-      ph,
+      -width / 2,
+      -height / 2,
+      width,
+      height,
     );
     c.restore();
   });
